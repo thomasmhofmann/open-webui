@@ -1,5 +1,8 @@
 import logging
 from typing import Optional, Tuple, List, Dict, Any
+import re
+from collections import Counter
+import xxhash
 from urllib.parse import urlparse
 
 import grpc
@@ -30,6 +33,87 @@ DEFAULT_DIMENSION = 384
 
 log = logging.getLogger(__name__)
 
+
+
+def generate_sparse_vector(text: str) -> Dict[str, List]:
+    """
+    Generate BM25-style sparse vector from text using deterministic hashing.
+    
+    Uses xxhash for consistent, collision-resistant term indexing that works
+    reliably across different Python processes and systems.
+    
+    Args:
+        text: Input text to generate sparse vector from
+        
+    Returns:
+        Dictionary with:
+            - indices: List of term hashes (deterministic xxhash32)
+            - values: List of term weights (normalized TF)
+    
+    Example:
+        >>> generate_sparse_vector("hello world hello")
+        {'indices': [123456, 789012], 'values': [0.2, 0.1]}
+    """
+    # Tokenize (extract words)
+    tokens = re.findall(r'\w+', text.lower())
+    
+    # Remove very short tokens and common stopwords
+    # English stopwords
+    stopwords_en = {
+        'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'but',
+        'in', 'with', 'to', 'for', 'of', 'as', 'by', 'from', 'it', 'that',
+        'this', 'are', 'was', 'were', 'been', 'be', 'have', 'has', 'had'
+    }
+    
+    # German stopwords
+    stopwords_de = {
+        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer', 'eines',
+        'und', 'oder', 'aber', 'ist', 'sind', 'war', 'waren', 'wird', 'werden',
+        'auf', 'in', 'zu', 'von', 'mit', 'für', 'als', 'bei', 'an', 'aus',
+        'nach', 'vor', 'über', 'unter', 'durch', 'hat', 'haben', 'hatte', 'hatten',
+        'kann', 'können', 'könnte', 'soll', 'sollte', 'muss', 'müssen',
+        'sich', 'nicht', 'auch', 'nur', 'noch', 'mehr', 'wie', 'wenn', 'dann'
+    }
+    
+    # Combine both stopword sets
+    stopwords = stopwords_en | stopwords_de
+    
+    # Filter tokens: length > 2 and not in stopwords
+    tokens = [t for t in tokens if len(t) > 2 and t not in stopwords]
+    
+    if not tokens:
+        return {"indices": [], "values": []}
+    
+    # Calculate term frequencies
+    term_freq = Counter(tokens)
+    
+    # Convert to sparse vector format with deduplication
+    # Use dict to handle hash collisions - if two terms hash to same index, sum their weights
+    index_weight_map = {}
+    
+    for term, freq in term_freq.items():
+        # Use deterministic xxhash for consistent indexing across sessions/systems
+        # xxh32 provides excellent distribution and fits in Qdrant's uint32 sparse vector index range
+        index = xxhash.xxh32(term.encode('utf-8')).intdigest()
+        
+        # Normalize frequency (simple TF)
+        # Cap at 1.0 to prevent single terms from dominating
+        weight = min(1.0, freq / 10.0)
+        
+        # If index already exists (rare hash collision), sum weights
+        if index in index_weight_map:
+            index_weight_map[index] += weight
+        else:
+            index_weight_map[index] = weight
+    
+    # Convert to lists, ensuring uniqueness
+    indices = list(index_weight_map.keys())
+    values = list(index_weight_map.values())
+    
+    return {
+        "indices": indices,
+        "values": values
+    }
 
 def _tenant_filter(tenant_id: str) -> models.FieldCondition:
     return models.FieldCondition(
@@ -138,15 +222,32 @@ class QdrantClient(VectorDBBase):
         self, mt_collection_name: str, dimension: int = DEFAULT_DIMENSION
     ):
         """
-        Creates a collection with multi-tenancy configuration and payload indexes for tenant_id and metadata fields.
+        Creates a collection with multi-tenancy configuration, sparse vectors, and payload indexes.
+        
+        The collection supports both:
+        - Dense vectors (semantic embeddings) for semantic search
+        - Sparse vectors (BM25-style) for keyword/exact match search
+        
+        This enables hybrid search combining both approaches via RRF (Reciprocal Rank Fusion).
         """
         self.client.create_collection(
             collection_name=mt_collection_name,
-            vectors_config=models.VectorParams(
-                size=dimension,
-                distance=models.Distance.COSINE,
-                on_disk=self.QDRANT_ON_DISK,
-            ),
+            # Use dict format to support both dense and sparse vectors
+            vectors_config={
+                "": models.VectorParams(  # Dense vectors (unnamed/"" key for default)
+                    size=dimension,
+                    distance=models.Distance.COSINE,
+                    on_disk=self.QDRANT_ON_DISK,
+                ),
+            },
+            # Add sparse vector configuration for BM25-style search
+            sparse_vectors_config={
+                "text": models.SparseVectorParams(  # Named "text" for text-based sparse vectors
+                    index=models.SparseIndexParams(
+                        on_disk=self.QDRANT_ON_DISK,
+                    )
+                ),
+            },
             # Disable global index building due to multitenancy
             # For more details https://qdrant.tech/documentation/guides/multiple-partitions/#calibrate-performance
             hnsw_config=models.HnswConfigDiff(
@@ -155,7 +256,7 @@ class QdrantClient(VectorDBBase):
             ),
         )
         log.info(
-            f"Multi-tenant collection {mt_collection_name} created with dimension {dimension}!"
+            f"Multi-tenant collection {mt_collection_name} created with dimension {dimension} and sparse vectors!"
         )
 
         self.client.create_payload_index(
@@ -182,20 +283,41 @@ class QdrantClient(VectorDBBase):
         self, items: List[VectorItem], tenant_id: str
     ) -> List[PointStruct]:
         """
-        Create point structs from vector items with tenant ID.
+        Create point structs from vector items with tenant ID and sparse vectors.
+        
+        Each point includes:
+        - Dense vector (semantic embedding from the embedding model)
+        - Sparse vector (BM25-style generated from text)
+        - Payload with text, metadata, and tenant_id
         """
-        return [
-            PointStruct(
+        log.info(f"Creating {len(items)} points with sparse vectors (tenant_id={tenant_id})")
+        
+        points = []
+        for item in items:
+            # Generate sparse vector from text
+            sparse_vector = generate_sparse_vector(item["text"])
+            
+            # Create point with BOTH dense and sparse vectors
+            point = PointStruct(
                 id=item["id"],
-                vector=item["vector"],
+                vector={
+                    "": item["vector"],  # Dense vector (unnamed/default)
+                    "text": models.SparseVector(  # Sparse vector (named "text")
+                        indices=sparse_vector["indices"],
+                        values=sparse_vector["values"]
+                    )
+                },
                 payload={
                     "text": item["text"],
                     "metadata": item["metadata"],
                     TENANT_ID_FIELD: tenant_id,
                 },
             )
-            for item in items
-        ]
+            
+            points.append(point)
+        
+        log.info(f"Generated sparse vectors for {len(points)} points")
+        return points
 
     def _ensure_collection(
         self, mt_collection_name: str, dimension: int = DEFAULT_DIMENSION

@@ -1415,6 +1415,45 @@ async def view_knowledge_file(
         return json.dumps({"error": str(e)})
 
 
+def get_kb_ids_for_files(file_ids: set[str]) -> dict[str, str]:
+    """
+    Get knowledge base IDs for multiple files in a single batch query.
+    
+    This function performs a single database query to fetch KB IDs for all
+    provided file IDs, which is much more efficient than querying individually.
+    
+    :param file_ids: Set of file IDs to look up
+    :return: Dictionary mapping file_id → kb_id (first KB if file is in multiple)
+    """
+    try:
+        from open_webui.models.knowledge import KnowledgeFile
+        from open_webui.internal.db import get_db
+        
+        if not file_ids:
+            return {}
+        
+        with get_db() as db:
+            # Single query with IN clause - gets all mappings at once
+            results = (
+                db.query(KnowledgeFile.file_id, KnowledgeFile.knowledge_id)
+                .filter(KnowledgeFile.file_id.in_(file_ids))
+                .all()
+            )
+            
+            # Build mapping: file_id → kb_id
+            # If file is in multiple KBs, first one wins (consistent behavior)
+            kb_map = {}
+            for file_id, kb_id in results:
+                if file_id not in kb_map:
+                    kb_map[file_id] = kb_id
+            
+            return kb_map
+            
+    except Exception as e:
+        log.warning(f"Error batch getting kb_ids: {e}")
+        return {}
+
+
 async def query_knowledge_files(
     query: str,
     knowledge_ids: Optional[list[str]] = None,
@@ -1544,14 +1583,25 @@ async def query_knowledge_files(
                 metadatas = query_results.get("metadatas", [[]])[0]
                 distances = query_results.get("distances", [[]])[0]
 
+                # Batch fetch all kb_ids in one query for performance
+                file_ids = {m.get("file_id") for m in metadatas if m.get("file_id")}
+                kb_map = get_kb_ids_for_files(file_ids)
+
                 for idx, doc in enumerate(documents):
+                    file_id = metadatas[idx].get("file_id", "")
+                    
                     chunk_info = {
                         "content": doc,
                         "source": metadatas[idx].get(
                             "source", metadatas[idx].get("name", "Unknown")
                         ),
-                        "file_id": metadatas[idx].get("file_id", ""),
+                        "file_id": file_id,
                     }
+                    
+                    # Add kb_id from batch-fetched map
+                    if file_id and file_id in kb_map:
+                        chunk_info["kb_id"] = kb_map[file_id]
+                    
                     if idx < len(distances):
                         chunk_info["distance"] = distances[idx]
                     chunks.append(chunk_info)

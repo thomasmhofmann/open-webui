@@ -4037,3 +4037,30 @@ QDRANT_CUSTOM_ID_FILE_NAME_PATTERN = os.getenv(
 # Compile regex pattern once for performance
 import re
 _QDRANT_CUSTOM_ID_COMPILED_PATTERN = re.compile(QDRANT_CUSTOM_ID_FILE_NAME_PATTERN) if QDRANT_CUSTOM_ID_FILE_NAME_PATTERN else None
+
+
+####################################
+# Knowledge Base URL Mapping
+####################################
+
+# fork: Maps knowledge base IDs to external documentation base URLs
+# Used to replace internal file paths with external documentation links in citations
+# Format: {"kb-id": "https://base-url", ...}
+# Example: {"eip-documentation": "https://docs.example.com/eip"}
+# Default: {} (empty dict, feature disabled)
+
+try:
+    KB_DOC_URL_MAPPING = json.loads(
+        os.environ.get("KB_DOC_URL_MAPPING", "{}")
+    )
+    # Validate that it's a dictionary
+    if not isinstance(KB_DOC_URL_MAPPING, dict):
+        log.warning("KB_DOC_URL_MAPPING must be a JSON object (dict), using empty dict")
+        KB_DOC_URL_MAPPING = {}
+except json.JSONDecodeError as e:
+    log.warning(f"Invalid KB_DOC_URL_MAPPING JSON: {e}, using empty dict")
+    KB_DOC_URL_MAPPING = {}
+except Exception as e:
+    log.exception(f"Error loading KB_DOC_URL_MAPPING: {e}")
+    KB_DOC_URL_MAPPING = {}
+

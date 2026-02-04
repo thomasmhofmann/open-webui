@@ -36,6 +36,7 @@ from open_webui.models.chats import Chats
 from open_webui.models.channels import Channels, ChannelMember, Channel
 from open_webui.models.messages import Messages, Message
 from open_webui.models.groups import Groups
+from open_webui.utils.knowledge import get_kb_ids_for_files
 
 log = logging.getLogger(__name__)
 
@@ -1415,43 +1416,8 @@ async def view_knowledge_file(
         return json.dumps({"error": str(e)})
 
 
-def get_kb_ids_for_files(file_ids: set[str]) -> dict[str, str]:
-    """
-    Get knowledge base IDs for multiple files in a single batch query.
-    
-    This function performs a single database query to fetch KB IDs for all
-    provided file IDs, which is much more efficient than querying individually.
-    
-    :param file_ids: Set of file IDs to look up
-    :return: Dictionary mapping file_id → kb_id (first KB if file is in multiple)
-    """
-    try:
-        from open_webui.models.knowledge import KnowledgeFile
-        from open_webui.internal.db import get_db
-        
-        if not file_ids:
-            return {}
-        
-        with get_db() as db:
-            # Single query with IN clause - gets all mappings at once
-            results = (
-                db.query(KnowledgeFile.file_id, KnowledgeFile.knowledge_id)
-                .filter(KnowledgeFile.file_id.in_(file_ids))
-                .all()
-            )
-            
-            # Build mapping: file_id → kb_id
-            # If file is in multiple KBs, first one wins (consistent behavior)
-            kb_map = {}
-            for file_id, kb_id in results:
-                if file_id not in kb_map:
-                    kb_map[file_id] = kb_id
-            
-            return kb_map
-            
-    except Exception as e:
-        log.warning(f"Error batch getting kb_ids: {e}")
-        return {}
+# get_kb_ids_for_files() moved to open_webui.utils.knowledge
+# Imported at top of file for use by query_knowledge_files()
 
 
 async def query_knowledge_files(

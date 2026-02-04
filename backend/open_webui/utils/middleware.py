@@ -193,6 +193,25 @@ def get_citation_source_from_tool_result(
             filename = file_data.get("filename", "Unknown File")
             file_id = file_data.get("id", "")
             knowledge_name = file_data.get("knowledge_name", "")
+            knowledge_id = file_data.get("knowledge_id", "")  # fork: Get kb_id from result
+
+            metadata = {
+                "file_id": file_id,
+                "name": filename,
+                "source": filename,
+                **(
+                    {"knowledge_name": knowledge_name}
+                    if knowledge_name
+                    else {}
+                ),
+            }
+            
+            # fork: Enrich metadata with external URL if configured
+            from open_webui.config import KB_DOC_URL_MAPPING
+            from open_webui.utils.knowledge import enrich_metadata_with_url
+            
+            if KB_DOC_URL_MAPPING and knowledge_id:
+                enrich_metadata_with_url(metadata, knowledge_id, KB_DOC_URL_MAPPING)
 
             return [
                 {
@@ -202,18 +221,7 @@ def get_citation_source_from_tool_result(
                         "type": "file",
                     },
                     "document": [file_data.get("content", "")],
-                    "metadata": [
-                        {
-                            "file_id": file_id,
-                            "name": filename,
-                            "source": filename,
-                            **(
-                                {"knowledge_name": knowledge_name}
-                                if knowledge_name
-                                else {}
-                            ),
-                        }
-                    ],
+                    "metadata": [metadata],
                 }
             ]
 
@@ -230,6 +238,7 @@ def get_citation_source_from_tool_result(
                 note_id = chunk.get("note_id", "")
                 chunk_type = chunk.get("type", "file")
                 content = chunk.get("content", "")
+                kb_id = chunk.get("kb_id", "")  # fork: Get kb_id from chunk (added by Patch 4)
 
                 # Use file_id or note_id as the key
                 key = file_id or note_id or source_name
@@ -252,11 +261,23 @@ def get_citation_source_from_tool_result(
                         "name": source_name,
                         "source": source_name,
                         **({"note_id": note_id} if note_id else {}),
+                        **({"kb_id": kb_id} if kb_id else {}),  # fork: Preserve kb_id for URL enrichment
                     }
                 )
 
             # Return all grouped sources as a list
             if sources_by_file:
+                # fork: Enrich metadata with external URLs if configured
+                from open_webui.config import KB_DOC_URL_MAPPING
+                from open_webui.utils.knowledge import enrich_metadata_with_url
+                
+                if KB_DOC_URL_MAPPING:
+                    for source in sources_by_file.values():
+                        for metadata in source.get("metadata", []):
+                            kb_id = metadata.get("kb_id", "")
+                            if kb_id:
+                                enrich_metadata_with_url(metadata, kb_id, KB_DOC_URL_MAPPING)
+                
                 return list(sources_by_file.values())
 
             # Empty result fallback

@@ -1190,6 +1190,26 @@ async def get_sources_from_items(
             query_results.append({**query_result, "file": item})
 
     sources = []
+    
+    # fork: Collect file_ids for batch kb_id lookup
+    file_ids_to_enrich = set()
+    for query_result in query_results:
+        try:
+            if "documents" in query_result and "metadatas" in query_result:
+                for metadata in query_result["metadatas"][0]:
+                    file_id = metadata.get("file_id")
+                    if file_id:
+                        file_ids_to_enrich.add(file_id)
+        except Exception:
+            pass
+    
+    # fork: Batch lookup kb_ids for all files
+    file_to_kb_map = {}
+    if file_ids_to_enrich:
+        from open_webui.utils.knowledge import get_kb_ids_for_files
+        file_to_kb_map = get_kb_ids_for_files(file_ids_to_enrich)
+    
+    # Build sources and enrich metadata
     for query_result in query_results:
         try:
             if "documents" in query_result:
@@ -1201,6 +1221,17 @@ async def get_sources_from_items(
                     }
                     if "distances" in query_result and query_result["distances"]:
                         source["distances"] = query_result["distances"][0]
+                    
+                    # fork: Enrich metadata with external URLs if configured
+                    from open_webui.config import KB_DOC_URL_MAPPING
+                    from open_webui.utils.knowledge import enrich_metadata_with_url
+                    
+                    if KB_DOC_URL_MAPPING and file_to_kb_map:
+                        for metadata in source["metadata"]:
+                            file_id = metadata.get("file_id")
+                            if file_id and file_id in file_to_kb_map:
+                                kb_id = file_to_kb_map[file_id]
+                                enrich_metadata_with_url(metadata, kb_id, KB_DOC_URL_MAPPING)
 
                     sources.append(source)
         except Exception as e:

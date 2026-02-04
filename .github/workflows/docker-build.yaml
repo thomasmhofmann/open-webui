@@ -62,12 +62,11 @@ jobs:
         with:
           images: ${{ env.FULL_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
+            type=ref,event=branch,suffix=-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
             type=ref,event=tag
             type=sha,prefix=git-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch,suffix=-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
           flavor: |
             latest=${{ github.ref == 'refs/heads/main' }}
 
@@ -249,7 +248,6 @@ jobs:
         with:
           images: ${{ env.FULL_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
             type=ref,event=tag
             type=sha,prefix=git-
             type=semver,pattern={{version}}

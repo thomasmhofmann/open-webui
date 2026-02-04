@@ -72,6 +72,7 @@ from open_webui.tools.builtin import (
     search_knowledge_files,
     query_knowledge_files,
     view_knowledge_file,
+    retrieve_document_by_custom_id,
 )
 
 import copy
@@ -412,7 +413,12 @@ def get_builtin_tools(
     model_knowledge = model.get("info", {}).get("meta", {}).get("knowledge", [])
     if model_knowledge:
         # Model has attached knowledge - only allow semantic search within it
-        builtin_functions.append(query_knowledge_files)
+        builtin_functions.extend(
+            [
+                query_knowledge_files,
+                retrieve_document_by_custom_id,
+            ]
+        )
     else:
         # No model knowledge - allow full KB browsing
         builtin_functions.extend(
@@ -423,6 +429,7 @@ def get_builtin_tools(
                 search_knowledge_files,
                 query_knowledge_files,
                 view_knowledge_file,
+                retrieve_document_by_custom_id,
             ]
         )
 

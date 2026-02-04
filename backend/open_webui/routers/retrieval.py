@@ -28,6 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 import tiktoken
 
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
@@ -120,11 +121,80 @@ from open_webui.constants import ERROR_MESSAGES
 
 log = logging.getLogger(__name__)
 
+KNOWLEDGE_COLLECTION_NAME = "open-webui_knowledge"
+MAX_CHUNKS_PER_FILE = 10000
+
 ##########################################
 #
 # Utility functions
 #
 ##########################################
+
+def inject_metadata_into_chunks(file_id: str, custom_metadata: dict) -> bool:
+    """
+    Inject custom metadata into all Qdrant chunks for a file.
+    
+    This function queries Qdrant for all points associated with a file_id
+    and updates their metadata payloads using a single batched operation
+    for optimal performance.
+    
+    Args:
+        file_id: The file ID to update chunks for
+        custom_metadata: Dictionary of metadata to inject into each chunk
+        
+    Returns:
+        bool: True if successful, False if an error occurred
+        
+    Example:
+        success = inject_metadata_into_chunks("abc123", {"custom_id": "eip-1234"})
+    """
+    try:
+        qdrant_client = VECTOR_DB_CLIENT.client
+        
+        # Build filter to find all points for this file
+        scroll_filter = Filter(
+            must=[FieldCondition(key="metadata.file_id", match=MatchValue(value=file_id))]
+        )
+        
+        # Query Qdrant for all chunks with this file_id
+        scroll_result = qdrant_client.scroll(
+            collection_name=KNOWLEDGE_COLLECTION_NAME,
+            scroll_filter=scroll_filter,
+            limit=MAX_CHUNKS_PER_FILE,
+            with_payload=True,
+            with_vectors=False,  # Don't need vectors, just metadata
+        )
+        
+        if not scroll_result or not scroll_result[0]:
+            log.debug(f"No chunks found for file_id={file_id}")
+            return True
+        
+        points = scroll_result[0]
+        log.info(f"Found {len(points)} chunks for file_id={file_id}, injecting metadata")
+        
+        # Build batch payload updates
+        batch_payloads = {}
+        for point in points:
+            payload = point.payload or {}
+            # Merge custom metadata with existing metadata
+            payload["metadata"] = {**payload.get("metadata", {}), **custom_metadata}
+            batch_payloads[point.id] = payload
+        
+        # Perform single batched update to Qdrant
+        qdrant_client.set_payload(
+            collection_name=KNOWLEDGE_COLLECTION_NAME,
+            payload=batch_payloads,
+            points=list(batch_payloads.keys())
+        )
+        
+        log.info(f"Successfully injected metadata into {len(points)} chunks for file_id={file_id}")
+        return True
+        
+    except Exception as e:
+        log.exception(f"Error injecting metadata for file_id={file_id}")
+        return False
+
+
 
 
 def get_ef(
@@ -1776,6 +1846,26 @@ def process_file(
                             db=db,
                         )
                         Files.update_file_hash_by_id(file.id, hash, db=db)
+
+                        # After successful file processing, inject custom metadata
+                        try:
+                            from open_webui.config import _QDRANT_CUSTOM_ID_COMPILED_PATTERN
+                            
+                            custom_metadata = {}
+                            
+                            # Extract document ID from filename using pre-compiled pattern
+                            if _QDRANT_CUSTOM_ID_COMPILED_PATTERN:
+                                matches = _QDRANT_CUSTOM_ID_COMPILED_PATTERN.findall(file.filename)
+                                if matches:
+                                    custom_metadata["custom_id"] = matches[0].lower()
+                                    log.info(f"Extracted custom_id '{custom_metadata['custom_id']}' from filename")
+                            
+                            # Inject metadata if we have any
+                            if custom_metadata:
+                                inject_metadata_into_chunks(file.id, custom_metadata)
+                                
+                        except Exception as e:
+                            log.warning(f"Error in metadata injection for file {file.id}: {e}")
 
                         return {
                             "status": True,

@@ -4022,3 +4022,18 @@ LDAP_ATTRIBUTE_FOR_GROUPS = PersistentConfig(
     "ldap.server.attribute_for_groups",
     os.environ.get("LDAP_ATTRIBUTE_FOR_GROUPS", "memberOf"),
 )
+
+
+####################################
+# fork
+####################################
+
+# Custom ID extraction from filenames for Qdrant metadata injection
+QDRANT_CUSTOM_ID_FILE_NAME_PATTERN = os.getenv(
+    "QDRANT_CUSTOM_ID_FILE_NAME_PATTERN",
+    r"(?i)(?:eip|fsm|fst|ekp)-\d+"
+)
+
+# Compile regex pattern once for performance
+import re
+_QDRANT_CUSTOM_ID_COMPILED_PATTERN = re.compile(QDRANT_CUSTOM_ID_FILE_NAME_PATTERN) if QDRANT_CUSTOM_ID_FILE_NAME_PATTERN else None

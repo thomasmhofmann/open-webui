@@ -74,12 +74,22 @@ def get_file_path_from_db(file_id: str) -> Optional[str]:
             log.debug(f"[URL_ENRICH] File.meta is None for file_id: {file_id}")
             return None
         
-        path = file.meta.get("path")
-        if path:
-            log.debug(f"[URL_ENRICH] Found file path: {path}")
-        else:
-            log.debug(f"[URL_ENRICH] No 'path' in file.meta for file_id: {file_id}")
-        return path
+        # Path is stored in file.meta.data.path (confirmed via database query)
+        file_meta = file.meta or {}
+        log.debug(f"[URL_ENRICH] file.meta keys: {list(file_meta.keys())}")
+        
+        # Get custom metadata from 'data' field
+        custom_metadata = file_meta.get("data")
+        log.debug(f"[URL_ENRICH] custom_metadata found: {custom_metadata is not None}")
+        
+        if custom_metadata and isinstance(custom_metadata, dict):
+            path = custom_metadata.get("path")
+            if path:
+                log.debug(f"[URL_ENRICH] Found path in file.meta.data: {path}")
+                return path
+        
+        log.debug(f"[URL_ENRICH] No 'path' found in file.meta.data for file_id: {file_id}")
+        return None
     except Exception as e:
         log.warning(f"[URL_ENRICH] Error getting path for file {file_id}: {e}")
         return None

@@ -1564,6 +1564,156 @@ async def query_knowledge_files(
         log.exception(f"query_knowledge_files error: {e}")
         return json.dumps({"error": str(e)})
 
+async def retrieve_document_by_custom_id(
+    custom_id: str,
+    include_content: bool = True,
+    __request__: Request = None,
+    __user__: dict = None,
+) -> str:
+    """
+    Retrieve complete document(s) by their document ID (custom_id).
+    
+    **IMPORTANT - WHEN TO USE:**
+    Use this tool ONLY when the user's query contains a document ID pattern:
+    - Patterns: EIP-XXXX, FSM-XXXX, FST-XXXX, EKP-XXXX (where XXXX is numbers)
+    - Examples: "eip-1234", "FSM-5678", "show me fst-9999"
+    - Case-insensitive: "EIP-1234" = "eip-1234"
+    
+    **DO NOT USE if:**
+    - No document ID pattern in query
+    - General questions without specific document reference
+    - Use query_knowledge_files() for semantic search instead
+    
+    **FALLBACK STRATEGY:**
+    If this tool returns an error (no documents found), automatically call
+    query_knowledge_files() with the user's original query to perform semantic
+    search as a fallback. This ensures the user always gets relevant results.
+    
+    **How it works:**
+    1. Searches Qdrant for chunks tagged with the specified custom_id
+    2. Retrieves full content of all matching documents
+    3. Respects knowledge base access permissions
+    4. Returns complete document(s) with metadata
+    
+    :param custom_id: Document ID extracted from user query (e.g., "eip-1234")
+    :param include_content: Include full text content (default: True)
+    :return: JSON with documents or error with fallback suggestion
+    
+    **Example Flow:**
+    User: "show me eip-1234"
+    → retrieve_document_by_custom_id("eip-1234")
+    → Returns full document
+    
+    User: "what is eip-9999?"
+    → retrieve_document_by_custom_id("eip-9999")
+    → Returns: {"error": "...", "fallback_action": "semantic_search"}
+    → Then call: query_knowledge_files("eip-9999")
+    
+    User: "tell me about authentication"  [NO ID PATTERN]
+    → Skip this tool
+    → Directly call: query_knowledge_files("authentication")
+    """
+    if __request__ is None:
+        return json.dumps({"error": "Request context not available"})
+    
+    if not __user__:
+        return json.dumps({"error": "User context not available"})
+    
+    try:
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
+        
+        # Normalize custom_id to lowercase for consistent matching
+        normalized_custom_id = custom_id.lower()
+        
+        # Step 1: Query Qdrant for chunks with this custom_id
+        qdrant_client = VECTOR_DB_CLIENT.client
+        collection_name = "open-webui_knowledge"
+        
+        scroll_filter = Filter(
+            must=[FieldCondition(
+                key="metadata.custom_id",
+                match=MatchValue(value=normalized_custom_id)
+            )]
+        )
+        
+        scroll_result = qdrant_client.scroll(
+            collection_name=collection_name,
+            scroll_filter=scroll_filter,
+            limit=100,  # Should be enough to find all file_ids
+            with_payload=True,
+            with_vectors=False,
+        )
+        
+        if not scroll_result or not scroll_result[0]:
+            return json.dumps({
+                "error": f"No documents found with custom_id '{custom_id}'",
+                "suggestion": "Try using query_knowledge_files() for semantic search instead",
+                "fallback_action": "semantic_search"
+            })
+        
+        # Step 2: Extract unique file_ids from chunks
+        file_ids = set()
+        for point in scroll_result[0]:
+            if point.payload and "metadata" in point.payload:
+                file_id = point.payload["metadata"].get("file_id")
+                if file_id:
+                    file_ids.add(file_id)
+        
+        if not file_ids:
+            return json.dumps({
+                "error": f"No file_ids found for custom_id '{custom_id}'",
+                "suggestion": "Try using query_knowledge_files() for semantic search instead",
+                "fallback_action": "semantic_search"
+            })
+        
+        log.info(f"Found {len(file_ids)} file(s) for custom_id '{custom_id}'")
+        
+        # Step 3: Retrieve full documents using view_knowledge_file()
+        # This automatically handles all permission checks
+        documents = []
+        for file_id in file_ids:
+            result_json = await view_knowledge_file(
+                file_id=file_id,
+                __request__=__request__,
+                __user__=__user__,
+            )
+            result = json.loads(result_json)
+            
+            # Skip if error (permission denied, not found, etc.)
+            if "error" not in result:
+                # Add custom_id to result
+                result["custom_id"] = custom_id
+                
+                # Optionally exclude content for summary view
+                if not include_content:
+                    result.pop("content", None)
+                
+                documents.append(result)
+        
+        if not documents:
+            return json.dumps({
+                "error": f"No accessible documents found for custom_id '{custom_id}'",
+                "message": "Documents exist but you don't have permission to access them",
+                "suggestion": "Try using query_knowledge_files() for semantic search instead",
+                "fallback_action": "semantic_search"
+            })
+        
+        return json.dumps({
+            "custom_id": custom_id,
+            "document_count": len(documents),
+            "documents": documents
+        }, ensure_ascii=False)
+        
+    except Exception as e:
+        log.exception(f"retrieve_document_by_custom_id error: {e}")
+        return json.dumps({
+            "error": str(e),
+            "suggestion": "Try using query_knowledge_files() for semantic search instead",
+            "fallback_action": "semantic_search"
+        })
+
+
 
 async def query_knowledge_bases(
     query: str,

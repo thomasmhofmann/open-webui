@@ -210,8 +210,18 @@ def get_citation_source_from_tool_result(
             from open_webui.config import KB_DOC_URL_MAPPING
             from open_webui.utils.knowledge import enrich_metadata_with_url
             
+            log.debug(f"[MIDDLEWARE] view_knowledge_file: Checking URL enrichment")
+            log.debug(f"[MIDDLEWARE] KB_DOC_URL_MAPPING configured: {bool(KB_DOC_URL_MAPPING)}")
+            log.debug(f"[MIDDLEWARE] knowledge_id: {knowledge_id}")
+            
             if KB_DOC_URL_MAPPING and knowledge_id:
+                log.info(f"[MIDDLEWARE] Calling enrich_metadata_with_url for knowledge_id: {knowledge_id}")
                 enrich_metadata_with_url(metadata, knowledge_id, KB_DOC_URL_MAPPING)
+            else:
+                if not KB_DOC_URL_MAPPING:
+                    log.debug(f"[MIDDLEWARE] Skipping enrichment: KB_DOC_URL_MAPPING is empty")
+                if not knowledge_id:
+                    log.debug(f"[MIDDLEWARE] Skipping enrichment: knowledge_id is empty")
 
             return [
                 {
@@ -271,12 +281,25 @@ def get_citation_source_from_tool_result(
                 from open_webui.config import KB_DOC_URL_MAPPING
                 from open_webui.utils.knowledge import enrich_metadata_with_url
                 
+                log.debug(f"[MIDDLEWARE] query_knowledge_files: Processing {len(sources_by_file)} sources")
+                log.debug(f"[MIDDLEWARE] KB_DOC_URL_MAPPING configured: {bool(KB_DOC_URL_MAPPING)}")
+                
                 if KB_DOC_URL_MAPPING:
+                    enrichment_count = 0
                     for source in sources_by_file.values():
                         for metadata in source.get("metadata", []):
                             kb_id = metadata.get("kb_id", "")
+                            file_id = metadata.get("file_id", "")
+                            log.debug(f"[MIDDLEWARE] Processing metadata: file_id={file_id}, kb_id={kb_id}")
                             if kb_id:
+                                log.info(f"[MIDDLEWARE] Calling enrich_metadata_with_url for kb_id: {kb_id}")
                                 enrich_metadata_with_url(metadata, kb_id, KB_DOC_URL_MAPPING)
+                                enrichment_count += 1
+                            else:
+                                log.debug(f"[MIDDLEWARE] Skipping metadata: no kb_id present")
+                    log.info(f"[MIDDLEWARE] Attempted enrichment on {enrichment_count} metadata entries")
+                else:
+                    log.debug(f"[MIDDLEWARE] Skipping enrichment: KB_DOC_URL_MAPPING is empty")
                 
                 return list(sources_by_file.values())
 

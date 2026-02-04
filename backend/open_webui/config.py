@@ -4057,6 +4057,14 @@ try:
     if not isinstance(KB_DOC_URL_MAPPING, dict):
         log.warning("KB_DOC_URL_MAPPING must be a JSON object (dict), using empty dict")
         KB_DOC_URL_MAPPING = {}
+    else:
+        # Log the loaded mapping for debugging
+        if KB_DOC_URL_MAPPING:
+            log.info(f"KB_DOC_URL_MAPPING loaded with {len(KB_DOC_URL_MAPPING)} entries")
+            for kb_id, url in KB_DOC_URL_MAPPING.items():
+                log.debug(f"  KB ID: {kb_id} -> Base URL: {url}")
+        else:
+            log.info("KB_DOC_URL_MAPPING is empty - URL enrichment disabled")
 except json.JSONDecodeError as e:
     log.warning(f"Invalid KB_DOC_URL_MAPPING JSON: {e}, using empty dict")
     KB_DOC_URL_MAPPING = {}

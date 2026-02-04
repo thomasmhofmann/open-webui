@@ -1226,12 +1226,31 @@ async def get_sources_from_items(
                     from open_webui.config import KB_DOC_URL_MAPPING
                     from open_webui.utils.knowledge import enrich_metadata_with_url
                     
+                    log.debug(f"[RETRIEVAL] Processing source with {len(source['metadata'])} metadata entries")
+                    log.debug(f"[RETRIEVAL] KB_DOC_URL_MAPPING configured: {bool(KB_DOC_URL_MAPPING)}")
+                    log.debug(f"[RETRIEVAL] file_to_kb_map has {len(file_to_kb_map) if file_to_kb_map else 0} entries")
+                    
                     if KB_DOC_URL_MAPPING and file_to_kb_map:
+                        enrichment_count = 0
                         for metadata in source["metadata"]:
                             file_id = metadata.get("file_id")
+                            log.debug(f"[RETRIEVAL] Processing metadata with file_id: {file_id}")
                             if file_id and file_id in file_to_kb_map:
                                 kb_id = file_to_kb_map[file_id]
+                                log.info(f"[RETRIEVAL] Found kb_id {kb_id} for file_id {file_id}, calling enrich_metadata_with_url")
                                 enrich_metadata_with_url(metadata, kb_id, KB_DOC_URL_MAPPING)
+                                enrichment_count += 1
+                            else:
+                                if not file_id:
+                                    log.debug(f"[RETRIEVAL] Skipping: no file_id in metadata")
+                                elif file_id not in file_to_kb_map:
+                                    log.debug(f"[RETRIEVAL] Skipping: file_id {file_id} not in file_to_kb_map")
+                        log.info(f"[RETRIEVAL] Attempted enrichment on {enrichment_count} metadata entries")
+                    else:
+                        if not KB_DOC_URL_MAPPING:
+                            log.debug(f"[RETRIEVAL] Skipping enrichment: KB_DOC_URL_MAPPING is empty")
+                        if not file_to_kb_map:
+                            log.debug(f"[RETRIEVAL] Skipping enrichment: file_to_kb_map is empty")
 
                     sources.append(source)
         except Exception as e:

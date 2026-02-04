@@ -65,13 +65,23 @@ def get_file_path_from_db(file_id: str) -> Optional[str]:
     try:
         from open_webui.models.files import Files
         
+        log.debug(f"[URL_ENRICH] Looking up file path for file_id: {file_id}")
         file = Files.get_file_by_id(file_id)
-        if not file or not file.meta:
+        if not file:
+            log.debug(f"[URL_ENRICH] File not found for file_id: {file_id}")
+            return None
+        if not file.meta:
+            log.debug(f"[URL_ENRICH] File.meta is None for file_id: {file_id}")
             return None
         
-        return file.meta.get("path")
+        path = file.meta.get("path")
+        if path:
+            log.debug(f"[URL_ENRICH] Found file path: {path}")
+        else:
+            log.debug(f"[URL_ENRICH] No 'path' in file.meta for file_id: {file_id}")
+        return path
     except Exception as e:
-        log.debug(f"Error getting path for file {file_id}: {e}")
+        log.warning(f"[URL_ENRICH] Error getting path for file {file_id}: {e}")
         return None
 
 
@@ -93,38 +103,48 @@ def reconstruct_antora_url(file_path: str, base_url: str) -> Optional[str]:
     :return: Reconstructed URL or None if path doesn't match Antora structure
     """
     try:
+        log.debug(f"[URL_ENRICH] Reconstructing URL from path: {file_path}, base_url: {base_url}")
+        
         # Check for Antora structure
         if "/modules/" not in file_path:
+            log.debug(f"[URL_ENRICH] Path does not contain '/modules/' - not Antora structure")
             return None
         
         # Split at /modules/ to get the module and page parts
         parts = file_path.split("/modules/")
         if len(parts) != 2:
+            log.debug(f"[URL_ENRICH] Path split by '/modules/' did not yield 2 parts: {len(parts)}")
             return None
         
         module_and_page = parts[1]
+        log.debug(f"[URL_ENRICH] Module and page part: {module_and_page}")
         
         # Check for /pages/ directory
         if "/pages/" not in module_and_page:
+            log.debug(f"[URL_ENRICH] Module part does not contain '/pages/' - not Antora structure")
             return None
         
         # Split at /pages/ to get module name and page path
         module_parts = module_and_page.split("/pages/")
         if len(module_parts) != 2:
+            log.debug(f"[URL_ENRICH] Module split by '/pages/' did not yield 2 parts: {len(module_parts)}")
             return None
         
         module_name = module_parts[0]
         page_path = module_parts[1]
+        log.debug(f"[URL_ENRICH] Extracted module: {module_name}, page: {page_path}")
         
         # Convert .adoc extension to .html
         if page_path.endswith(".adoc"):
             page_path = page_path[:-5] + ".html"
+            log.debug(f"[URL_ENRICH] Converted .adoc to .html: {page_path}")
         
         # Build the final URL
         url = f"{base_url.rstrip('/')}/{module_name}/{page_path}"
+        log.info(f"[URL_ENRICH] Successfully reconstructed URL: {url}")
         return url
     except Exception as e:
-        log.debug(f"Error reconstructing URL from path {file_path}: {e}")
+        log.warning(f"[URL_ENRICH] Error reconstructing URL from path {file_path}: {e}")
         return None
 
 
@@ -153,42 +173,62 @@ def enrich_metadata_with_url(
     :return: Enriched metadata dict (same object, modified in place)
     """
     try:
+        log.debug(f"[URL_ENRICH] === Starting enrichment ===")
+        log.debug(f"[URL_ENRICH] Input metadata keys: {list(metadata.keys())}")
+        log.debug(f"[URL_ENRICH] kb_id: {kb_id}")
+        log.debug(f"[URL_ENRICH] kb_doc_url_mapping has {len(kb_doc_url_mapping)} entries")
+        
         # Guard clause: validate file_id and kb_id
         file_id = metadata.get("file_id")
-        if not file_id or not kb_id:
+        if not file_id:
+            log.debug(f"[URL_ENRICH] No file_id in metadata - skipping enrichment")
             return metadata
+        if not kb_id:
+            log.debug(f"[URL_ENRICH] No kb_id provided - skipping enrichment")
+            return metadata
+        
+        log.debug(f"[URL_ENRICH] file_id: {file_id}")
         
         # Guard clause: check KB has URL mapping
         if kb_id not in kb_doc_url_mapping:
+            log.debug(f"[URL_ENRICH] kb_id '{kb_id}' not in KB_DOC_URL_MAPPING - skipping enrichment")
+            log.debug(f"[URL_ENRICH] Available KB IDs: {list(kb_doc_url_mapping.keys())}")
             return metadata
         
         # Guard clause: validate base_url
         base_url = kb_doc_url_mapping[kb_id]
         if not base_url or not isinstance(base_url, str):
-            log.warning(f"Invalid base_url for kb_id {kb_id}: {base_url}")
+            log.warning(f"[URL_ENRICH] Invalid base_url for kb_id {kb_id}: {base_url}")
             return metadata
+        
+        log.debug(f"[URL_ENRICH] Found base_url for kb_id: {base_url}")
         
         # Get file path from database
         file_path = get_file_path_from_db(file_id)
         if not file_path:
+            log.debug(f"[URL_ENRICH] No file path found - skipping enrichment")
             return metadata
         
         # Reconstruct external URL
         doc_url = reconstruct_antora_url(file_path, base_url)
         if not doc_url:
+            log.debug(f"[URL_ENRICH] URL reconstruction failed - skipping enrichment")
             return metadata
         
         # Apply enrichment
+        old_source = metadata.get("source")
         metadata["source"] = doc_url
         metadata.pop("file_id", None)
         
-        log.debug(f"Enriched metadata with URL: {doc_url}")
+        log.info(f"[URL_ENRICH] ✓ Successfully enriched metadata: '{old_source}' -> '{doc_url}'")
+        log.debug(f"[URL_ENRICH] Removed file_id from metadata (will open URL instead of download)")
         return metadata
         
     except Exception as e:
-        log.warning(
-            f"Error enriching metadata: {e}",
-            extra={"file_id": metadata.get("file_id"), "kb_id": kb_id}
+        log.error(
+            f"[URL_ENRICH] Exception during enrichment: {e}",
+            extra={"file_id": metadata.get("file_id"), "kb_id": kb_id},
+            exc_info=True
         )
         return metadata
 

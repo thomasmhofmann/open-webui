@@ -115,6 +115,92 @@ def generate_sparse_vector(text: str) -> Dict[str, List]:
         "values": values
     }
 
+def extract_custom_id(metadata: Dict[str, Any], text: str, file_id: Optional[str] = None) -> Optional[str]:
+    """
+    Extract custom_id from multiple sources with detailed logging.
+    
+    Extraction priority:
+    1. Check if custom_id already exists in metadata
+    2. Extract from text content using regex pattern
+    3. Fetch from file metadata in database
+    
+    Args:
+        metadata: Item metadata dictionary
+        text: Text content to search for document IDs
+        file_id: Optional file ID to look up in database
+        
+    Returns:
+        Extracted custom_id (lowercase) or None
+    """
+    log.debug(f"[CUSTOM_ID] Starting extraction for file_id={file_id}")
+    
+    # Step 1: Check if custom_id already in metadata
+    custom_id = metadata.get("custom_id")
+    if custom_id:
+        log.info(f"[CUSTOM_ID] ✓ Found in metadata: '{custom_id}'")
+        return str(custom_id).lower()
+    log.debug(f"[CUSTOM_ID] Not found in metadata, trying text extraction")
+    
+    # Step 2: Extract from text content using regex
+    try:
+        # Import the pattern getter from config
+        from open_webui.config import _QDRANT_CUSTOM_ID_COMPILED_PATTERN
+        
+        if _QDRANT_CUSTOM_ID_COMPILED_PATTERN:
+            # Search first 1000 characters for performance
+            matches = _QDRANT_CUSTOM_ID_COMPILED_PATTERN.findall(text[:1000])
+            
+            if matches:
+                # Handle tuple matches from regex groups (e.g., (EIP|FST|EKP)-\d+)
+                if isinstance(matches[0], tuple):
+                    # Reconstruct full match from groups - join all non-empty groups
+                    document_ids = ["-".join(str(g) for g in match if g) for match in matches]
+                else:
+                    document_ids = [str(match) for match in matches]
+                
+                if document_ids:
+                    custom_id = document_ids[0].lower()
+                    log.info(f"[CUSTOM_ID] ✓ Extracted from text: '{custom_id}'")
+                    return custom_id
+            
+            log.debug(f"[CUSTOM_ID] No matches in text using configured pattern")
+        else:
+            log.debug(f"[CUSTOM_ID] No regex pattern configured (_QDRANT_CUSTOM_ID_COMPILED_PATTERN is None)")
+    except Exception as e:
+        log.warning(f"[CUSTOM_ID] Error during text extraction: {e}")
+    
+    # Step 3: Fetch from file metadata in database
+    if file_id:
+        try:
+            from open_webui.models.files import Files
+            
+            # Normalize file_id (remove "file-" prefix if present)
+            normalized_file_id = file_id[5:] if isinstance(file_id, str) and file_id.startswith("file-") else file_id
+            log.debug(f"[CUSTOM_ID] Looking up file metadata for file_id={normalized_file_id}")
+            
+            file_record = Files.get_file_by_id(normalized_file_id)
+            
+            if file_record:
+                file_meta = getattr(file_record, "meta", {}) or {}
+                file_metadata = file_meta.get("metadata") or file_meta.get("data") or {}
+                custom_id = file_metadata.get("custom_id")
+                
+                if custom_id:
+                    log.info(f"[CUSTOM_ID] ✓ Found in file metadata: '{custom_id}' (file_id={normalized_file_id})")
+                    return str(custom_id).lower()
+                else:
+                    log.debug(f"[CUSTOM_ID] File metadata exists but no custom_id field (file_id={normalized_file_id})")
+            else:
+                log.debug(f"[CUSTOM_ID] File record not found (file_id={normalized_file_id})")
+        except Exception as e:
+            log.warning(f"[CUSTOM_ID] Error fetching file metadata: {e}")
+    else:
+        log.debug(f"[CUSTOM_ID] No file_id provided, skipping database lookup")
+    
+    log.debug(f"[CUSTOM_ID] ✗ No custom_id found from any source")
+    return None
+
+
 def _tenant_filter(tenant_id: str) -> models.FieldCondition:
     return models.FieldCondition(
         key=TENANT_ID_FIELD, match=models.MatchValue(value=tenant_id)
@@ -289,6 +375,7 @@ class QdrantClient(VectorDBBase):
         - Dense vector (semantic embedding from the embedding model)
         - Sparse vector (BM25-style generated from text)
         - Payload with text, metadata, and tenant_id
+        - Custom_id extracted from metadata, text, or file database
         """
         log.info(f"Creating {len(items)} points with sparse vectors (tenant_id={tenant_id})")
         
@@ -296,6 +383,17 @@ class QdrantClient(VectorDBBase):
         for item in items:
             # Generate sparse vector from text
             sparse_vector = generate_sparse_vector(item["text"])
+            
+            # Make a copy of metadata to avoid modifying the original
+            metadata = dict(item.get("metadata", {}))
+            
+            # Extract custom_id using multi-step process
+            file_id = metadata.get("file_id")
+            custom_id = extract_custom_id(metadata, item["text"], file_id)
+            
+            if custom_id:
+                metadata["custom_id"] = custom_id
+                log.info(f"[CUSTOM_ID] Added to chunk: '{custom_id}'")
             
             # Create point with BOTH dense and sparse vectors
             point = PointStruct(
@@ -309,7 +407,7 @@ class QdrantClient(VectorDBBase):
                 },
                 payload={
                     "text": item["text"],
-                    "metadata": item["metadata"],
+                    "metadata": metadata,
                     TENANT_ID_FIELD: tenant_id,
                 },
             )

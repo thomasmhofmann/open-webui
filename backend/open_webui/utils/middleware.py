@@ -235,6 +235,58 @@ def get_citation_source_from_tool_result(
                 }
             ]
 
+        elif tool_name == "retrieve_document_by_custom_id":
+            # Parse result: {"custom_id": "...", "document_count": N, "documents": [...]}
+            result_data = json.loads(tool_result)
+            documents = result_data.get("documents", [])
+            
+            # Create a source entry for each document
+            sources = []
+            for doc in documents:
+                file_id = doc.get("id", "")
+                filename = doc.get("filename", "Unknown File")
+                knowledge_id = doc.get("knowledge_id", "")
+                knowledge_name = doc.get("knowledge_name", "")
+                content = doc.get("content", "")
+                custom_id = doc.get("custom_id", "")
+                
+                metadata = {
+                    "file_id": file_id,
+                    "name": filename,
+                    "source": filename,
+                    **({"knowledge_name": knowledge_name} if knowledge_name else {}),
+                    **({"custom_id": custom_id} if custom_id else {}),
+                }
+                
+                # fork: Enrich metadata with external URL if configured
+                from open_webui.config import KB_DOC_URL_MAPPING
+                from open_webui.utils.knowledge import enrich_metadata_with_url
+                
+                log.debug(f"[MIDDLEWARE] retrieve_document_by_custom_id: Processing document {filename}")
+                log.debug(f"[MIDDLEWARE] KB_DOC_URL_MAPPING configured: {bool(KB_DOC_URL_MAPPING)}")
+                log.debug(f"[MIDDLEWARE] knowledge_id: {knowledge_id}")
+                
+                if KB_DOC_URL_MAPPING and knowledge_id:
+                    log.info(f"[MIDDLEWARE] Calling enrich_metadata_with_url for knowledge_id: {knowledge_id}")
+                    enrich_metadata_with_url(metadata, knowledge_id, KB_DOC_URL_MAPPING)
+                else:
+                    if not KB_DOC_URL_MAPPING:
+                        log.debug(f"[MIDDLEWARE] Skipping enrichment: KB_DOC_URL_MAPPING is empty")
+                    if not knowledge_id:
+                        log.debug(f"[MIDDLEWARE] Skipping enrichment: knowledge_id is empty")
+                
+                sources.append({
+                    "source": {
+                        "id": file_id,
+                        "name": filename,
+                        "type": "file",
+                    },
+                    "document": [content],
+                    "metadata": [metadata],
+                })
+            
+            return sources
+
         elif tool_name == "query_knowledge_files":
             chunks = json.loads(tool_result)
 

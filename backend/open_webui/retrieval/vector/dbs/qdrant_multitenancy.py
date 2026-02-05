@@ -144,7 +144,7 @@ def extract_custom_id(file_id: Optional[str] = None) -> Optional[str]:
             custom_id = file_metadata.get("custom_id")
             
             if custom_id:
-                log.info(f"[CUSTOM_ID] ✓ Found in file metadata: '{custom_id}' (file_id={normalized_file_id})")
+                log.debug(f"[CUSTOM_ID] ✓ Found in file metadata: '{custom_id}' (file_id={normalized_file_id})")
                 return str(custom_id).lower()
             else:
                 log.debug(f"[CUSTOM_ID] File metadata exists but no custom_id field (file_id={normalized_file_id})")
@@ -333,7 +333,7 @@ class QdrantClient(VectorDBBase):
         - Payload with text, metadata, and tenant_id
         - Custom_id extracted from metadata, text, or file database
         """
-        log.info(f"Creating {len(items)} points with sparse vectors (tenant_id={tenant_id})")
+        log.debug(f"Creating {len(items)} points with sparse vectors (tenant_id={tenant_id})")
         
         points = []
         for item in items:
@@ -349,7 +349,7 @@ class QdrantClient(VectorDBBase):
             
             if custom_id:
                 metadata["custom_id"] = custom_id
-                log.info(f"[CUSTOM_ID] Added to chunk: '{custom_id}'")
+                log.debug(f"[CUSTOM_ID] Added to chunk: '{custom_id}'")
             
             # Create point with BOTH dense and sparse vectors
             point = PointStruct(
@@ -370,7 +370,7 @@ class QdrantClient(VectorDBBase):
             
             points.append(point)
         
-        log.info(f"Generated sparse vectors for {len(points)} points")
+        log.debug(f"Generated sparse vectors for {len(points)} points")
         return points
 
     def _ensure_collection(

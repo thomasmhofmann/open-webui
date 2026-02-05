@@ -63,7 +63,7 @@ jobs:
         with:
           images: ${{ env.FULL_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch,suffix=slim-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
+            type=ref,event=branch,suffix=-slim-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
             type=ref,event=tag
             type=sha,prefix=git-
             type=semver,pattern={{version}}
@@ -79,7 +79,7 @@ jobs:
         with:
           images: ${{ env.FULL_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch,suffix=slim-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
+            type=ref,event=branch,suffix=-slim-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
             ${{ github.ref_type == 'tag' && 'type=raw,value=main' || '' }}
           flavor: |
             prefix=cache-slim-${{ matrix.platform }}-
@@ -150,7 +150,7 @@ jobs:
         with:
           images: ${{ env.FULL_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch,suffix=slim-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
+            type=ref,event=branch,suffix=-slim-{{date 'YYYYMMDD-HHmm' tz='UTC'}}
             type=ref,event=tag
             type=sha,prefix=git-
             type=semver,pattern={{version}}
